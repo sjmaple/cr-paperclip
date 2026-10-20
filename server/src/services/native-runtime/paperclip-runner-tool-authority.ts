@@ -1,3 +1,4 @@
+import { priorRecoveryApiReceipt } from "../recovery-effect-receipts.js";
 import { DELIVERY_QUEUES, notifyDeliveryWork } from "../delivery-work-notifications.js";
 import { skillAccessService } from "../skill-access.js";
 import { withExternalExecutionAdmission, type ExternalAdmissionTransaction } from "../../modules/external-agents/index.js";
@@ -871,6 +872,15 @@ export class PaperclipRunnerToolAuthority {
       const locked = await this.#lockAuthorizedMutationContext(tx as unknown as Db);
       const resultJson = record(locked.run.resultJson);
       const receipts = record(resultJson.apiToolReceipts);
+      const inherited = await priorRecoveryApiReceipt(tx as unknown as Db, { companyId: this.binding.companyId,
+        issueId: this.binding.issueId, runId: this.binding.runId, operationId: operation.operationId, digest });
+      if (inherited) {
+        if (inherited.encryptedResult) {
+          const text = await getSecretProvider("local_encrypted").resolveVersion({ material: record(inherited.encryptedResult), externalRef: null });
+          return { result: JSON.parse(text) as unknown };
+        }
+        return { result: inherited.result };
+      }
       const existing = record(receipts[key]);
       if (receipts[key]) {
         if (existing.digest !== digest) throw badRequest("API call id was reused with different arguments");

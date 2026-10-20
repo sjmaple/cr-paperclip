@@ -106,6 +106,44 @@ describe.skipIf(!support.supported)("heartbeat workspace preparation boundary", 
   const readRun = (id: string) => db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, id)).then(rows => rows[0]!);
   const leases = (id: string) => db.select().from(environmentLeases).where(eq(environmentLeases.heartbeatRunId, id));
 
+  it("a fresh retry creates independent files and Git storage instead of reopening a configured task branch", async () => {
+    const { input, source, issue } = await fixture(true);
+    const original = await prepareHeartbeatWorkspace(db, input);
+    await writeFile(join(original.executionWorkspace.cwd, "unpublished.txt"), "keep the old work\n");
+    const [nextRun] = await db.insert(heartbeatRuns).values({ companyId: input.run.companyId,
+      agentId: input.agent.id, issueId: issue.id, scopeKind: "issue", status: "running", runtimeMode: "legacy" }).returning();
+    input.task.freshWorkspace = { mode: "fresh_isolated_workspace", retryIntentId: nextRun.id,
+      sourceRunId: input.run.id, retainedSourceIds: [] };
+    input.run = nextRun;
+    input.task.issueRef = { ...issue, executionWorkspaceId: null, executionWorkspacePreference: "create_new" };
+    const replacement = await prepareHeartbeatWorkspace(db, input);
+    expect(replacement.persistedExecutionWorkspace!.id).not.toBe(original.persistedExecutionWorkspace!.id);
+    expect(replacement.executionWorkspace.cwd).not.toBe(original.executionWorkspace.cwd);
+    expect(replacement.executionWorkspace.cwd).not.toBe(source);
+    expect(await readFile(join(replacement.executionWorkspace.cwd, "README.md"), "utf8")).toBe("source content\n");
+    expect(await readFile(join(original.executionWorkspace.cwd, "unpublished.txt"), "utf8")).toBe("keep the old work\n");
+    const common = await execFile("git", ["-C", replacement.executionWorkspace.cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    expect(common.stdout.trim()).toBe(join(replacement.executionWorkspace.cwd, ".git"));
+    await expect(access(join(replacement.executionWorkspace.cwd, "unpublished.txt"))).rejects.toThrow();
+    expect((await readIssue(issue.id)).executionWorkspaceId).toBe(replacement.persistedExecutionWorkspace!.id);
+  }, 30_000);
+
+  it("starts a fresh clean task directory without treating it as a Git source", async () => {
+    const { input, source, issue } = await fixture();
+    input.policy.useIsolatedTaskDirectory = true;
+    input.policy.effectiveExecutionWorkspaceMode = "isolated_workspace";
+    input.policy.requestedExecutionWorkspaceMode = "isolated_workspace";
+    input.task.freshWorkspace = { mode: "fresh_isolated_workspace", retryIntentId: input.run.id,
+      sourceRunId: input.run.id, retainedSourceIds: [] };
+    const prepared = await prepareHeartbeatWorkspace(db, input);
+    expect(prepared.executionWorkspace.cwd).toContain("/isolated-workspace-attempts/");
+    expect(prepared.executionWorkspace.cwd).toContain(`/${input.run.id}`);
+    expect(prepared.executionWorkspace.cwd).not.toBe(source);
+    await expect(access(join(prepared.executionWorkspace.cwd, "README.md"))).rejects.toThrow();
+    expect(await readFile(join(source, "README.md"), "utf8")).toBe("source content\n");
+    expect((await readIssue(issue.id)).executionWorkspaceId).toBe(prepared.persistedExecutionWorkspace!.id);
+  });
+
   async function reuse(input: HeartbeatWorkspacePreparationInput, workspace: NonNullable<Awaited<ReturnType<typeof prepareHeartbeatWorkspace>>["persistedExecutionWorkspace"]>) {
     input.reuse.requestedShouldReuseExisting = true;
     input.reuse.existingExecutionWorkspace = workspace;

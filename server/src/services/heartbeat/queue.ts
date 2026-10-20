@@ -1,3 +1,5 @@
+import { authorizationService } from "../authorization.js";
+import { readTaskRetryIntent } from "../task-retry.js";
 import { withExternalAdmissionGuard, assertNoExternalOverlap } from "../../modules/external-agents/index.js";
 import { isAgentAwaitingSetup } from "../../modules/agent-lifecycle/index.js";
 import { normalizeAgentNameKey } from "./retries.js";
@@ -2091,6 +2093,7 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
     if (payload) {
       delete payload.queuedCommentInterrupt;
       delete payload.manualUserWake;
+      delete payload.taskRetry;
     }
     if (opts.manualUserWake) {
       if (opts.requestedByActorType !== "user" || !opts.requestedByActorId || opts.failedRunId) {
@@ -2120,6 +2123,28 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
     let issueId =
       readNonEmptyString(enrichedContextSnapshot.issueId) ?? issueIdFromPayload;
     if (executionReconciliationWake && !issueId) return null;
+    const durableRequest = opts.durableChatRequest;
+    let taskRetryActorId: string | null = null;
+    if (opts.taskRetryRequestId) {
+      const [receipt] = await db.select().from(agentWakeupRequests).where(and(
+        eq(agentWakeupRequests.id, opts.taskRetryRequestId), eq(agentWakeupRequests.agentId, agentId),
+        eq(agentWakeupRequests.status, "deferred_issue_execution"),
+        eq(agentWakeupRequests.requestedByActorType, "user"),
+        sql`${agentWakeupRequests.payload}->>'issueId' = ${issueId ?? ""}`,
+      ));
+      const retry = readTaskRetryIntent(receipt?.payload);
+      if (!receipt || retry?.generationId !== receipt.id || retry.canonicalIntentId ||
+          retry.actorId !== receipt.requestedByActorId) return null;
+      const chatRetry = retry.chatActionId && durableRequest?.id === retry.chatActionId &&
+        durableRequest.failedRunRetry?.failedRunId === retry.sourceRunId;
+      if (retry.chatActionId ? !chatRetry :
+          opts.requestedByActorType !== "user" || retry.actorId !== opts.requestedByActorId) return null;
+      taskRetryActorId = retry.actorId;
+      enrichedContextSnapshot.forceFreshSession = true;
+      enrichedContextSnapshot.previousRunId = retry.sourceRunId;
+      enrichedContextSnapshot.taskRetryRequestId = receipt.id;
+    }
+
 
     let agent = await getAgent(agentId);
     if (!agent) throw notFound("Agent not found");
@@ -2136,7 +2161,7 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
         if (isConversationExecutionWake(conversation, reason ?? readNonEmptyString(enrichedContextSnapshot.wakeReason))) return null;
         if (agent.id !== conversation!.conversationAgentId) return null;
         if (!(await instanceSettings.getExperimental()).enableAgentChat) return null;
-        if (!wakeCommentId && isWaitingConversation(conversation) && !hasInteractionContinuationWakeContext(enrichedContextSnapshot) && reason !== CHAT_COMPLETION_WAKE_REASON) return null;
+        if (!wakeCommentId && !opts.taskRetryRequestId && isWaitingConversation(conversation) && !hasInteractionContinuationWakeContext(enrichedContextSnapshot) && reason !== CHAT_COMPLETION_WAKE_REASON) return null;
       }
     }
     if (agent.adapterType === "paperclip_runner") {
@@ -2187,7 +2212,6 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
       }
     }
 
-    const durableRequest = opts.durableChatRequest;
     if (durableRequest) {
       assertDurableChatWakeupRequest(durableRequest, {
         agentId,
@@ -2700,10 +2724,21 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
             ));
             // The issue lock serializes cleanup callbacks and periodic workers.
             // An adopted, discarded, or edited receipt is no longer authority.
-            if (!pending || (!(wakeCommentId && queuedCommentIdsFromWakePayload(pending.payload).includes(wakeCommentId)) &&
+            if (!pending || (!opts.taskRetryRequestId && !(wakeCommentId && queuedCommentIdsFromWakePayload(pending.payload).includes(wakeCommentId)) &&
                 !(opts.queuedCommentInterruptId && await readQueuedInteractionResponse(tx as unknown as Db,
                   agent.companyId, issueId, pending.payload)))) {
               return { kind: "deferred" as const };
+            }
+            if (opts.taskRetryRequestId) {
+              const retry = readTaskRetryIntent(pending.payload);
+              if (pending.id !== opts.taskRetryRequestId || retry?.generationId !== pending.id || retry.chatActionId ||
+                  retry.actorId !== opts.requestedByActorId || retry.sourceRunId !== enrichedContextSnapshot.previousRunId)
+                return { kind: "deferred" as const };
+              const permission = await authorizationService(tx as unknown as Db).decide({
+                actor: { type: "board", userId: retry.actorId, source: retry.actorSource }, action: "issue:mutate",
+                resource: { type: "issue", companyId: agent.companyId, issueId },
+              });
+              if (!permission.allowed) return { kind: "deferred" as const };
             }
             if (opts.queuedCommentRequestId) {
               const ids = await undeliveredLegacyUserCommentIds(tx as unknown as Db,
@@ -2839,6 +2874,21 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
             if (issueId !== durableRequest.issueId)
               throw new Error("chat_inbound_wakeup_binding_denied");
             await durableRequest.authorize(tx as unknown as Db);
+            if (opts.taskRetryRequestId) {
+              const [retryWake] = await tx.select().from(agentWakeupRequests).where(and(
+                eq(agentWakeupRequests.companyId, agent.companyId), eq(agentWakeupRequests.id, opts.taskRetryRequestId),
+                eq(agentWakeupRequests.agentId, agentId), eq(agentWakeupRequests.status, "deferred_issue_execution"),
+              )).for("update");
+              const retry = readTaskRetryIntent(retryWake?.payload);
+              if (!failedChatRetry || retry?.chatActionId !== durableRequest.id ||
+                  retry.actorId !== taskRetryActorId || retry.sourceRunId !== durableRequest.failedRunRetry?.failedRunId)
+                throw new FailedChatRunRetryAuthorizationError();
+              const permission = await authorizationService(tx as unknown as Db).decide({
+                actor: { type: "board", userId: retry.actorId, source: retry.actorSource }, action: "issue:mutate",
+                resource: { type: "issue", companyId: agent.companyId, issueId },
+              });
+              if (!permission.allowed) return { kind: "deferred" as const };
+            }
           } else {
             if (
               source === "on_demand" &&
@@ -3183,11 +3233,12 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
             && executionBlocker.recoveryActionId === enrichedContextSnapshot.recoveryActionId;
           if (executionBlocker && !ownsReconstructionContinuation && !(await admitExplicitNativeContinuation({
             db: tx as unknown as Db, companyId: issue.companyId, issueId: issue.id,
-            agentId, actorType: opts.requestedByActorType, actorId: opts.requestedByActorId,
-            reason: durableRequest && !failedChatRetry ? "issue_commented" : reason,
+            agentId, actorType: taskRetryActorId ? "user" : opts.requestedByActorType, actorId: taskRetryActorId ?? opts.requestedByActorId,
+            reason: taskRetryActorId ? "task_retry" : durableRequest && !failedChatRetry ? "issue_commented" : reason,
             commentId: wakeCommentId ?? null, failedRunId: opts.failedRunId, successorRunId: explicitContinuationRunId,
             queuedCommentInterruptId: opts.queuedCommentInterruptId,
             queuedCommentRequestId: opts.queuedCommentRequestId,
+            taskRetryRequestId: opts.taskRetryRequestId,
             dryRun: true,
             onBlocked: (reason, message) => { continuationWait = { reason, message }; },
           }))) return deferBlockedExecution(executionBlocker);
@@ -3973,11 +4024,12 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
 
           const explicitContinuation = await admitExplicitNativeContinuation({
             db: tx as unknown as Db, companyId: issue.companyId, issueId: issue.id,
-            agentId, actorType: opts.requestedByActorType, actorId: opts.requestedByActorId,
-            reason: durableRequest && !failedChatRetry ? "issue_commented" : reason,
+            agentId, actorType: taskRetryActorId ? "user" : opts.requestedByActorType, actorId: taskRetryActorId ?? opts.requestedByActorId,
+            reason: taskRetryActorId ? "task_retry" : durableRequest && !failedChatRetry ? "issue_commented" : reason,
             commentId: wakeCommentId ?? null, failedRunId: opts.failedRunId, successorRunId: explicitContinuationRunId,
             queuedCommentInterruptId: opts.queuedCommentInterruptId,
             queuedCommentRequestId: opts.queuedCommentRequestId,
+            taskRetryRequestId: opts.taskRetryRequestId,
           });
           if (!explicitContinuation && executionBlocker && !ownsReconstructionContinuation) return deferBlockedExecution(executionBlocker);
           if (explicitContinuation) {
@@ -4034,7 +4086,7 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
                       inArray(agentWakeupRequests.agentId, handoffSource ? [agentId, handoffSource.agentId] : [agentId]),
                       eq(agentWakeupRequests.status, "deferred_issue_execution"),
                       sql`${agentWakeupRequests.payload}->>'issueId' = ${issue.id}`,
-                      canCoalesceComments ? undefined : eq(agentWakeupRequests.id, executionWaitRequestId!),
+                      canCoalesceComments || opts.taskRetryRequestId ? undefined : eq(agentWakeupRequests.id, executionWaitRequestId!),
                     ),
                   )
                   .orderBy(asc(agentWakeupRequests.requestedAt))
@@ -4066,7 +4118,7 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
               ...queuedCommentIdsFromRunContext(enrichedContextSnapshot),
             ]),
           ];
-          if (opts.queuedCommentRequestId || handoffSource) {
+          if (opts.queuedCommentRequestId || opts.taskRetryRequestId || handoffSource) {
             adoptedCommentIds = await undeliveredLegacyUserCommentIds(tx as unknown as Db,
               agent.companyId, issueId, agentId, adoptedCommentIds);
           }
@@ -4121,6 +4173,14 @@ export function createHeartbeatQueue(db: Db, dependencies: HeartbeatQueueDepende
               updatedAt: new Date(),
             })
             .where(eq(agentWakeupRequests.id, wakeupRequest.id));
+
+          if (failedChatRetry && opts.taskRetryRequestId) {
+            await tx.update(agentWakeupRequests).set({
+              status: "coalesced", runId: newRun.id, finishedAt: new Date(), updatedAt: new Date(),
+            }).where(and(eq(agentWakeupRequests.companyId, issue.companyId),
+              eq(agentWakeupRequests.id, opts.taskRetryRequestId),
+              eq(agentWakeupRequests.status, "deferred_issue_execution")));
+          }
 
           if (adoptedComments.length) {
             await tx
