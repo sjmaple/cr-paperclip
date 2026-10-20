@@ -2,6 +2,111 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+/* offline-recovery:start */
+.paperclip-offline {
+  --offline-background: #171716;
+  --offline-foreground: #fafafa;
+  --offline-muted: #a3a3a3;
+  --offline-control: #262626;
+  --offline-control-hover: #333333;
+  --offline-border: #404040;
+  --offline-focus: #6995ff;
+  --offline-font: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --offline-space: 1.5rem;
+  --offline-identity-gap: calc(var(--offline-space) * 0.8);
+  --offline-message-gap: calc(var(--offline-space) * 0.75);
+  --offline-copy-gap: 0.75rem;
+  --offline-title-size: 1.75rem;
+  --offline-body-size: 0.9375rem;
+  --offline-character-size: 9.6rem;
+  --offline-character-outer-start: #252525;
+  --offline-character-outer-end: #686c6e;
+  --offline-character-inner-start: #292929;
+  --offline-character-inner-end: #727679;
+  --offline-character-face: #333333;
+  --offline-character-tear: #f6fdff;
+  --offline-content-width: 32rem;
+  --offline-control-height: 2.75rem;
+  --offline-radius: 0.5rem;
+  --offline-stroke: 1px;
+  --offline-focus-width: 2px;
+  --offline-focus-offset: 4px;
+  --offline-weight: 600;
+  --offline-leading: 1.5;
+  --offline-heading-leading: 1.25;
+  --offline-tracking: -0.025em;
+  color-scheme: dark;
+  box-sizing: border-box;
+  margin: 0;
+  min-height: 100vh;
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+  padding: var(--offline-space);
+  background: var(--offline-background);
+  color: var(--offline-foreground);
+  font-family: var(--offline-font);
+  font-size: var(--offline-body-size);
+  line-height: var(--offline-leading);
+  text-align: center;
+}
+.paperclip-offline main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--offline-space);
+  width: 100%;
+  max-width: var(--offline-content-width);
+}
+.paperclip-offline-message,
+.paperclip-offline-identity {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.paperclip-offline-message {
+  gap: var(--offline-message-gap);
+}
+.paperclip-offline-identity {
+  gap: var(--offline-identity-gap);
+}
+.paperclip-offline-character {
+  width: var(--offline-character-size);
+  height: var(--offline-character-size);
+}
+.paperclip-offline h1 {
+  margin: 0;
+  font-size: var(--offline-title-size);
+  font-weight: var(--offline-weight);
+  line-height: var(--offline-heading-leading);
+  letter-spacing: var(--offline-tracking);
+  text-wrap: balance;
+}
+.paperclip-offline p {
+  margin: 0;
+  color: var(--offline-muted);
+  text-wrap: pretty;
+}
+.paperclip-offline button {
+  min-height: var(--offline-control-height);
+  padding: var(--offline-copy-gap) var(--offline-space);
+  border: var(--offline-stroke) solid var(--offline-border);
+  border-radius: var(--offline-radius);
+  background: var(--offline-control);
+  color: inherit;
+  font: inherit;
+  font-weight: var(--offline-weight);
+  cursor: pointer;
+}
+.paperclip-offline button:hover {
+  background: var(--offline-control-hover);
+}
+.paperclip-offline button:focus-visible {
+  outline: var(--offline-focus-width) solid var(--offline-focus);
+  outline-offset: var(--offline-focus-offset);
+}
+/* offline-recovery:end */
+
 @font-face {
   font-family: "InterVariable";
   src: url("/fonts/InterVariable.woff2") format("woff2");

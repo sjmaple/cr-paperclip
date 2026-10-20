@@ -168,3 +168,11 @@ tokenize motion. Principles — reasoning only; values live in `ui/src/index.css
   in addition to each animation's own component-level guard.
 
 Agent Chat and regular task chats keep pending questions as compact “Unanswered question” entries at their original position in history. Dismissing the form or sending a newer user message clears it from the composer without resolving it. Questions never contribute to composer pending counts or navigation. Opening the history entry restores the original form and its draft; submitting later uses the same durable question response path. Actual permission reviews retain their permission checks.
+
+## Offline recovery
+
+The service worker recovery page uses a centered character, a dark surface, and
+a visible Reload page action. Keep the character inline and embed the marked
+`offline-recovery` section from `ui/src/index.css` at build time so the page needs
+no network requests or cached assets. Preserve the supplied character palette
+through the offline tokens.
