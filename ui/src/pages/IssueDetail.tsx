@@ -1,5 +1,6 @@
 import { grokBotApi } from "@/api/grokBot";
 import { WorkspaceBaseRefRecoveryProvider } from "../components/WorkspaceBaseRefRecovery";
+import { WorkspaceRetryControl } from "../components/WorkspaceRetryButton";
 import { isLockedIssueStub, LockedIssueChip } from "@/components/LockedIssueChip";
 import { canManageIssuePrivacy } from "../lib/issuePrivacy";
 import { TextAttachmentContext } from "../context/TextAttachmentContext";
@@ -2538,7 +2539,7 @@ const IssueDetailChatTab = memo(function IssueDetailChatTab({
               if (activeRunQueryEnabled) void refetchActiveRun();
             }}
             composerRef={composerRef}
-            composerAccessory={composerAccessory}
+            composerAccessory={<><WorkspaceRetryControl />{composerAccessory}</>}
             threadHeader={
               !classicTaskInterfaceEnabled &&
               (threadHeader || loadOlderButton) ? (
@@ -8096,7 +8097,8 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
             >
               {resolvedDetailTab === "chat" ? (
                 <WorkspaceBaseRefRecoveryProvider issue={issue} agentMap={agentMap} onRepaired={() => { invalidateIssueDetail(); invalidateIssueCollections(); }}
-                  unavailableReason={!canManageBoardRuntime || !canResolveBoardRecoveryAction ? "You don’t have permission to repair this task’s workspace."
+                  baseRefUnavailableReason={!canManageBoardRuntime ? "You don’t have permission to repair this task’s workspace." : null}
+                  unavailableReason={!canResolveBoardRecoveryAction ? "You don’t have permission to retry this task."
                     : treeControlStateError ? "Couldn’t check whether this task is paused. Refresh to try again."
                     : activePauseHold ? "Resume the task before retrying."
                     : issue.project?.pausedAt ? "Resume the project before retrying."

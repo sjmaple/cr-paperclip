@@ -1,5 +1,5 @@
 import { resolveIssueChatHumanAuthor } from "@/lib/issue-chat-human-author";
-import { useWorkspaceBaseRefRecovery } from "./WorkspaceBaseRefRecovery";
+import { useCurrentWorkspaceRetry, useWorkspaceBaseRefRecovery, useWorkspaceRetry } from "./WorkspaceBaseRefRecovery";
 import { WorkspaceBaseRefRecoveryNotice } from "./WorkspaceBaseRefRecoveryNotice";
 import { DispositionRecoveryNotice, useDispositionRecoverySnapshot } from "./DispositionRecoveryNotice";
 import { AgentAvatar } from "@/components/AgentAvatar";
@@ -3500,6 +3500,7 @@ function SystemNoticeCommentContent({
     : null;
   const recoverySnapshot = useDispositionRecoverySnapshot(commentMetadata);
   const branchRecovery = useWorkspaceBaseRefRecovery(commentMetadata);
+  const workspaceRetry = useWorkspaceRetry(commentMetadata);
   const runAgentId =
     typeof custom.runAgentId === "string" ? custom.runAgentId : null;
   const runId = typeof custom.runId === "string" ? custom.runId : null;
@@ -3596,6 +3597,7 @@ function SystemNoticeCommentContent({
       });
   };
 
+  if (authorType === "system" && workspaceRetry) return null;
   if (authorType === "system" && branchRecovery) return <div id={anchorId}><WorkspaceBaseRefRecoveryNotice key={`${branchRecovery.actionId}:${branchRecovery.runId}`} {...branchRecovery.props} /></div>;
 
   if (authorType === "system" && recoverySnapshot) {
@@ -5847,6 +5849,7 @@ export function IssueChatThread({
   externalReferences,
   linkCaseReferences = false,
 }: IssueChatThreadProps) {
+  const workspaceRetry = useCurrentWorkspaceRetry();
   const location = useLocation();
   const lastScrolledHashRef = useRef<string | null>(null);
   const didInitialHashScrollDecisionRef = useRef(false);
@@ -6634,7 +6637,7 @@ export function IssueChatThread({
                       onResume={onResumeFromBacklog}
                       resuming={resumeFromBacklogPending}
                     />
-                    {recoveryAction ? (
+                    {recoveryAction && !workspaceRetry ? (
                       <IssueRecoveryActionCard
                         action={recoveryAction}
                         agentMap={agentMap}

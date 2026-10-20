@@ -1109,11 +1109,11 @@ describeEmbeddedPostgres("heartbeat workspace branch containment", () => {
     const [issue] = await db.select().from(issues).where(eq(issues.id, seeded.issueId));
     expect(issue).toMatchObject({ status: "blocked", executionRunId: null, executionWorkspaceId: seeded.executionWorkspaceId });
     const comments = await db.select({ body: issueComments.body }).from(issueComments).where(eq(issueComments.issueId, seeded.issueId));
-    expect(comments.map(comment => comment.body).join("\n")).toContain("shared project checkout that also holds another task's workspace");
+    expect(comments.map(comment => comment.body).join("\n")).toContain("The task couldn’t start.");
     const actions = await db.select({ nextAction: issueRecoveryActions.nextAction }).from(issueRecoveryActions)
       .where(eq(issueRecoveryActions.sourceIssueId, seeded.issueId));
     expect(actions).toHaveLength(1);
-    expect(actions.map(action => action.nextAction).join("\n")).toContain("select a new workspace");
+    expect(actions.map(action => action.nextAction).join("\n")).toContain("Retry the task.");
     expect(await db.select({ id: heartbeatRuns.id }).from(heartbeatRuns).where(eq(heartbeatRuns.companyId, seeded.companyId))).toHaveLength(1);
     expect(await readFile(path.join(seeded.worktree, "retained.txt"), "utf8")).toBe("unexported original task edits\n");
   });

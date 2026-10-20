@@ -1,4 +1,5 @@
 import { parseObject } from "../adapters/utils.js";
+import { prepareRestrictedWorkspaceRetry } from "../services/restricted-workspace-retry.js";
 import { issueSummariesQuerySchema, type IssueSummary } from "@paperclipai/shared";
 import { listIssueSummaries } from "../services/issue-summaries.js";
 import { assertLegacyRunTaskOwnership } from "../legacy-run-task-ownership.js";
@@ -9713,6 +9714,10 @@ export function issueRoutes(
           { source: "recovery_action_resolution" },
         );
 
+        const workspaceRetry = outcome === "restored" && sourceIssueStatus === "todo"
+          ? await prepareRestrictedWorkspaceRetry(tx as unknown as Db, lockedIssue, activeRecoveryAction)
+          : null;
+        if (workspaceRetry) assertBoard(req);
         let repairedWorkspaceSettings: Record<string, unknown> | undefined;
         if (workspaceBaseRef) {
           const currentSettings = parseObject(lockedIssue.executionWorkspaceSettings);
@@ -9777,12 +9782,12 @@ export function issueRoutes(
         if (
           outcome === "restored" &&
           sourceIssueStatus === "todo" &&
-          (activeRecoveryAction.kind === "deliberate_wait_without_target" || workspaceBaseRef)
+          (activeRecoveryAction.kind === "deliberate_wait_without_target" || workspaceBaseRef || workspaceRetry)
         ) {
           if (
             lockedIssue.status !== "blocked" ||
             activeRecoveryAction.ownerType !== "board" ||
-            (!workspaceBaseRef && activeRecoveryAction.wakePolicy?.type !== "board_escalation") ||
+            (!workspaceBaseRef && !workspaceRetry && activeRecoveryAction.wakePolicy?.type !== "board_escalation") ||
             !activeRecoveryAction.returnOwnerAgentId ||
             lockedIssue.assigneeAgentId !== activeRecoveryAction.returnOwnerAgentId
           ) {
@@ -9947,6 +9952,14 @@ export function issueRoutes(
             });
           } else {
             await requireRecoverySourceMutationAuthority(req, lockedIssue);
+          }
+
+          if (workspaceRetry?.selection) {
+            await executionWorkspaceServiceDirect(tx as unknown as Db).selectTaskWorkspace({
+              companyId: lockedIssue.companyId, issueId: lockedIssue.id, actor: req.actor,
+              selection: workspaceRetry.selection, expectedBindingRevision: lockedIssue.workspaceBindingRevision,
+              requestKey: activeRecoveryAction.id, source: "recovery",
+            });
           }
 
           if (
